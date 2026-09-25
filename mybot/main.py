@@ -135,6 +135,10 @@ def _check_direction(d):
     edge = here_tile.get_edge(d)
     if edge.get_edge_type() == EdgeType.KELP:
         return False, 999, False, 999
+        
+    # Portal check — safe to enter, but we don't know what's on the other side
+    if edge.get_edge_type() == EdgeType.PORTAL:
+        return True, 5, False, 999
 
     dest = pos.add_dir(d)
     dest_tile = ct.get_tile(dest)
@@ -221,10 +225,6 @@ def flood_fill_area(start_pos, first_dir, max_tiles):
             if nk in visited:
                 continue
                 
-            n_tile = ct.get_tile(Position(nx, ny))
-            if n_tile is not None and n_tile.get_dragon() is not None:
-                continue
-                
             visited.add(nk)
             queue.append(nk)
             
@@ -242,9 +242,11 @@ def get_safe_moves():
     for d in _DIRS:
         passable, danger, has_pearl, pearl_time = _check_direction(d)
         if passable:
-            area = flood_fill_area(pos, d, my_len + 3)
+            area = flood_fill_area(pos, d, my_len + 5)
             if area <= my_len:
-                danger += 100 # Severe penalty for dead ends
+                danger += 100 + (my_len - area) # Prefer larger dead ends if trapped
+            else:
+                danger -= area # Prefer paths with more open space
             moves.append((d, danger, has_pearl, pearl_time))
             
     # Sort: lowest danger first, then pearl (True before False), then soonest pearl
@@ -379,29 +381,6 @@ def find_pearl_target():
     if best_soon:
         return best_soon
         
-    # Fallback to heatmap (highest spawn density)
-    best_density = 0
-    best_heat_target = None
-    best_heat_dist = 9999
-    
-    for k, v in world_map.items():
-        density = v.get('spawn_count', 0)
-        if density > 0:
-            tx, ty = k
-            dx = min(abs(tx - px), map_width - abs(tx - px))
-            dy = min(abs(ty - py), map_height - abs(ty - py))
-            dist = dx + dy
-            if dist == 0: continue
-            
-            # Prefer higher density, tiebreak with distance
-            if density > best_density or (density == best_density and dist < best_heat_dist):
-                best_density = density
-                best_heat_dist = dist
-                best_heat_target = Position(tx, ty)
-                
-    if best_heat_target:
-        return best_heat_target
-        
     return None
 
 
@@ -512,7 +491,7 @@ def should_split():
 
     # Don't over-split on small maps — cap total dragons relative to map area
     map_area = map_width * map_height
-    max_dragons = min(unit_limit, max(4, map_area // 20))
+    max_dragons = min(unit_limit, max(4, map_area // 40))
     if unit_count >= max_dragons:
         return False
 
@@ -616,7 +595,10 @@ def execute_turn():
     prev_pos = cur
 
     if stuck_count >= 3:
-        ct.make_move(random.choice([m[0] for m in safe_moves]))
+        if len(safe_moves) > 1:
+            ct.make_move(safe_moves[1][0]) # Pick second best to break loop safely
+        else:
+            ct.make_move(safe_moves[0][0])
         stuck_count = 0
         return
 
