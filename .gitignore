@@ -1,0 +1,17 @@
+# Replays & Battlecode builds
+replays/
+*.replay
+.unswbc-build/
+*.bak
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
