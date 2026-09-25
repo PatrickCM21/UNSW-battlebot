@@ -101,12 +101,17 @@ def update_world_map():
                     if entry not in portal_map[pid]:
                         portal_map[pid].append(entry)
 
-        world_map[k] = {
-            'kelp': kelp,
-            'pearl_time': tile.get_pearl_time(),
-            'has_pearl': tile.has_pearl(),
-            'round': rnd,
-        }
+        if k not in world_map:
+            world_map[k] = {'spawn_count': 0, 'had_pearl': False}
+
+        world_map[k]['kelp'] = kelp
+        world_map[k]['pearl_time'] = tile.get_pearl_time()
+        world_map[k]['has_pearl'] = tile.has_pearl()
+        world_map[k]['round'] = rnd
+
+        if tile.has_pearl() and not world_map[k]['had_pearl']:
+            world_map[k]['spawn_count'] += 1
+        world_map[k]['had_pearl'] = tile.has_pearl()
 
 # =============================================================================
 # 4. MOVEMENT SAFETY
@@ -184,16 +189,64 @@ def _check_direction(d):
     return True, danger, has_pearl, pearl_time
 
 
+def flood_fill_area(start_pos, first_dir, max_tiles):
+    """Count how many tiles are reachable if we step in first_dir."""
+    w, h = map_width, map_height
+    head = start_pos
+    nxt = head.add_dir(first_dir)
+    
+    queue = deque([(nxt.x, nxt.y)])
+    visited = {(head.x, head.y), (nxt.x, nxt.y)}
+    count = 0
+    
+    while queue and count < max_tiles:
+        cx, cy = queue.popleft()
+        count += 1
+        
+        ck = (cx, cy)
+        kelp_here = world_map[ck]['kelp'] if ck in world_map else set()
+        
+        for d in _DIRS:
+            if d in kelp_here: continue
+            
+            dx, dy = d.get_offset()
+            nx, ny = (cx + dx) % w, (cy + dy) % h
+            nk = (nx, ny)
+            
+            if nk in world_map:
+                opp = d.get_opposite()
+                if opp in world_map[nk].get('kelp', set()):
+                    continue
+                    
+            if nk in visited:
+                continue
+                
+            n_tile = ct.get_tile(Position(nx, ny))
+            if n_tile is not None and n_tile.get_dragon() is not None:
+                continue
+                
+            visited.add(nk)
+            queue.append(nk)
+            
+    return count
+
 def get_safe_moves():
     """
     Return list of (direction, danger_score, has_pearl, pearl_time)
     for all passable directions, sorted safest-first.
     """
     moves = []
+    my_len = ct.get_length()
+    pos = ct.get_position()
+    
     for d in _DIRS:
         passable, danger, has_pearl, pearl_time = _check_direction(d)
         if passable:
+            area = flood_fill_area(pos, d, my_len + 3)
+            if area <= my_len:
+                danger += 100 # Severe penalty for dead ends
             moves.append((d, danger, has_pearl, pearl_time))
+            
     # Sort: lowest danger first, then pearl (True before False), then soonest pearl
     moves.sort(key=lambda m: (m[1], not m[2], m[3] if m[3] >= 0 else 9999))
     return moves
@@ -325,6 +378,30 @@ def find_pearl_target():
         return best_pearl
     if best_soon:
         return best_soon
+        
+    # Fallback to heatmap (highest spawn density)
+    best_density = 0
+    best_heat_target = None
+    best_heat_dist = 9999
+    
+    for k, v in world_map.items():
+        density = v.get('spawn_count', 0)
+        if density > 0:
+            tx, ty = k
+            dx = min(abs(tx - px), map_width - abs(tx - px))
+            dy = min(abs(ty - py), map_height - abs(ty - py))
+            dist = dx + dy
+            if dist == 0: continue
+            
+            # Prefer higher density, tiebreak with distance
+            if density > best_density or (density == best_density and dist < best_heat_dist):
+                best_density = density
+                best_heat_dist = dist
+                best_heat_target = Position(tx, ty)
+                
+    if best_heat_target:
+        return best_heat_target
+        
     return None
 
 
@@ -476,7 +553,14 @@ def find_hunt_target():
     # Use sonar intel
     if enemy_intel:
         ei = enemy_intel[0]
-        return Position(ei['x'], ei['y'])
+        tx, ty = ei['x'], ei['y']
+        
+        # Coordinated Pincer: offset based on my ID
+        my_id = ct.get_id()
+        offsets = [(0, 0), (2, 0), (-2, 0), (0, 2), (0, -2)]
+        ox, oy = offsets[my_id % len(offsets)]
+        
+        return Position((tx + ox) % map_width, (ty + oy) % map_height)
 
     return None
 
